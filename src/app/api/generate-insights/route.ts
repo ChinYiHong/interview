@@ -1,43 +1,27 @@
-import { OpenAI } from "openai";
+import { AzureOpenAI } from "openai";
 import { NextResponse } from "next/server";
-import { ResponseService } from "@/services/responses.service";
-import { InterviewService } from "@/services/interviews.service";
 import {
   SYSTEM_PROMPT,
-  createUserPrompt,
-} from "@/lib/prompts/generate-insights";
+  generateQuestionsPrompt,
+} from "@/lib/prompts/generate-questions";
 import { logger } from "@/lib/logger";
 
+export const maxDuration = 60;
+
 export async function POST(req: Request, res: Response) {
-  logger.info("generate-insights request received");
+  logger.info("generate-interview-questions request received");
   const body = await req.json();
 
-  const responses = await ResponseService.getAllResponses(body.interviewId);
-  const interview = await InterviewService.getInterviewById(body.interviewId);
-
-  let callSummaries = "";
-  if (responses) {
-    responses.forEach((response) => {
-      callSummaries += response.details?.call_analysis?.call_summary;
-    });
-  }
-
-  const openai = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY,
+  const openai = new AzureOpenAI({
+    apiKey: process.env.AZURE_OPENAI_API_KEY,
+    endpoint: process.env.AZURE_OPENAI_ENDPOINT,
+    apiVersion: process.env.AZURE_OPENAI_API_VERSION || "2024-02-01",
     maxRetries: 5,
-    dangerouslyAllowBrowser: true,
   });
 
   try {
-    const prompt = createUserPrompt(
-      callSummaries,
-      interview.name,
-      interview.objective,
-      interview.description,
-    );
-
     const baseCompletion = await openai.chat.completions.create({
-      model: "gpt-4o",
+      model: process.env.AZURE_OPENAI_DEPLOYMENT_NAME || "gpt-4o",
       messages: [
         {
           role: "system",
@@ -45,22 +29,16 @@ export async function POST(req: Request, res: Response) {
         },
         {
           role: "user",
-          content: prompt,
+          content: generateQuestionsPrompt(body),
         },
       ],
       response_format: { type: "json_object" },
     });
 
     const basePromptOutput = baseCompletion.choices[0] || {};
-    const content = basePromptOutput.message?.content || "";
-    const insightsResponse = JSON.parse(content);
+    const content = basePromptOutput.message?.content;
 
-    await InterviewService.updateInterview(
-      { insights: insightsResponse.insights },
-      body.interviewId,
-    );
-
-    logger.info("Insights generated successfully");
+    logger.info("Interview questions generated successfully");
 
     return NextResponse.json(
       {
@@ -69,7 +47,7 @@ export async function POST(req: Request, res: Response) {
       { status: 200 },
     );
   } catch (error) {
-    logger.error("Error generating insights");
+    logger.error("Error generating interview questions");
 
     return NextResponse.json(
       { error: "internal server error" },
